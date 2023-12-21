@@ -1,0 +1,386 @@
+# Nodeのconfファイル系設定
+- name: "K8s_conf_setup"
+  tags:
+    - "k8s_conf_setup"
+  hosts:
+    # Inventoryで定義をしたホストグループを指定する
+    - "k8s-node"
+  # 特権権限を付与する
+  become: true
+  tasks:
+    ### modules-load.d/k8s.confファイルの作成
+    - name: Create file /etc/modules-load.d/k8s.conf
+      ansible.builtin.copy:
+        content: |
+          overlay
+          br_netfilter
+        dest: /etc/modules-load.d/k8s.conf
+        mode: '0644'
+      notify:
+        - "modprobe command"
+
+    ### sysctl.d/k8s.confファイルの作成
+    - name: "Create file /etc/sysctl.d/k8s.conf"
+      ansible.builtin.copy:
+        content: |
+          net.bridge.bridge-nf-call-iptables  = 1
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.ipv4.ip_forward                 = 1
+        dest: /etc/sysctl.d/k8s.conf
+        mode: '0644'
+      register: sysctlfile_write_result
+      notify:
+        - "Reload sysctl"
+        - "Check Sysctl"
+
+    - name: "Check Module"
+      ansible.builtin.command: lsmod | grep {{ item }}
+      loop:
+        - overlay
+        - br_netfilter
+      changed_when: false
+
+    - name: "Check Sysctl Result"
+      ansible.builtin.debug:
+        msg: "{{ sysctl_check_result.stdout_lines }}"
+        changed_when: false
+
+  handlers:
+    - name: "modprobe command"
+      ansible.builtin.command: modprobe {{ item }}
+      loop:
+        - overlay
+        - br_netfilter
+      changed_when: false
+
+    - name: "Reload sysctl"
+      ansible.builtin.command: sysctl --system
+      changed_when: false
+
+    - name: "Check Sysctl"
+      ansible.builtin.command: sysctl net.bridge.bridge-nf-call-iptables net.bridge.bridge-nf-call-ip6tables net.ipv4.ip_forward
+      changed_when: false
+      register: sysctl_check_result
+
+# Containerdのインストール
+- name: "Containerd_setup"
+  tags:
+    - "Containerd_setup"
+  hosts:
+    # Inventoryで定義をしたホストグループを指定する
+    - "k8s-node"
+  # 特権権限を付与する
+  become: true
+  vars:
+    containerd_version: 1.7.11 # https://github.com/containerd/containerd/releases
+  tasks:
+    ### Containerd パッケージのインストール
+    # Download containerd
+    - name: "Download Containerd"
+      ansible.builtin.get_url:
+        url: "https://github.com/containerd/containerd/releases/download/v{{ containerd_version }}/containerd-{{ containerd_version }}-linux-amd64.tar.gz"
+        dest: /tmp
+        mode: '0644'
+      register: containerd_download_result
+      changed_when: true
+      notify:
+        - "Extract Containerd"
+        - "Delete Archive File Containerd"
+
+    # ディレクトリ作成（このディレクトリがないと、後続でエラーになる）
+    - name: "Create directory /etc/containerd"
+      ansible.builtin.file:
+        path: /etc/containerd
+        state: directory
+        mode: '0755'
+      register: containerd_dir_create_result
+      changed_when: true
+
+    # containerdの設定ファイルを作成する
+    # https://github.com/containerd/containerd/blob/main/docs/getting-started.md#customizing-containerd
+    - name: "Create Containerd Config File"
+      ansible.builtin.command: sh -c 'containerd config default > /etc/containerd/config.toml'
+      register: containerd_config_create_result
+      # when: containerd_dir_create_result.changed
+      notify:
+        - "Replace a string in Containerd Config File"
+
+    # サービスユニットファイルのダウンロード
+    - name: "Download Containerd Service Unit File"
+      ansible.builtin.get_url:
+        url: "https://raw.githubusercontent.com/containerd/containerd/main/containerd.service"
+        dest: /usr/lib/systemd/system/
+        mode: '0644'
+      register: containerd_service_download_result
+      # when: containerd_extract_result is changed
+      notify:
+        - "Daemon-reload"
+        - "Enable and start containerd"
+
+  handlers:
+    # Containerdのダウンロードがされた場合は、それを展開する。
+    - name: "Extract Containerd"
+      ansible.builtin.unarchive:
+        src: /tmp/containerd-{{ containerd_version }}-linux-amd64.tar.gz
+        dest: /usr/local
+        remote_src: true
+        mode: '0755'
+      register: containerd_extract_result
+
+    # ダウンロードしたtar.gzファイルを削除する
+    - name: "Delete Archive File Containerd"
+      ansible.builtin.file:
+        path: /tmp/containerd-{{ containerd_version }}-linux-amd64.tar.gz
+        state: absent
+      register: containerd_archive_delete_result
+
+    # Cgroupの設定を変更する
+    - name: "Replace a string in Containerd Config File"
+      ansible.builtin.replace:
+        path: /etc/containerd/config.toml
+        regexp: 'SystemdCgroup = false'
+        replace: 'SystemdCgroup = true'
+
+    # Daemon Reload
+    - name: "Daemon-reload"
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+      register: daemon_reload_result
+
+    # Containerdのサービスを有効化して起動する
+    - name: "Enable and start containerd"
+      ansible.builtin.service:
+        name: containerd
+        state: started
+        enabled: true
+
+# runcのインストール
+- name: "Install_runc"
+  tags:
+    - "Install_runc"
+  hosts:
+    # Inventoryで定義をしたホストグループを指定する
+    - "k8s-node"
+  # 特権権限を付与する
+  become: true
+  vars:
+    runc_version: 1.1.10 # https://github.com/opencontainers/runc/releases
+  tasks:
+    # runc ダウンロード
+    - name: "Download_runc"
+      ansible.builtin.get_url:
+        url: "https://github.com/opencontainers/runc/releases/download/v{{ runc_version }}/runc.amd64"
+        dest: /tmp
+        mode: '0755'
+      register: "runc_download_result"
+      notify:
+        - "Install_command_runc"
+        - "Delete_Archive_File_runc"
+
+  handlers:
+    - name: "Install_command_runc"
+      ansible.builtin.command: install -m 755 /tmp/runc.amd64 /usr/local/sbin/runc
+
+    - name: "Delete_Archive_File_runc"
+      ansible.builtin.file:
+        path: /tmp/runc.amd64
+        state: absent
+
+- name: "Install_CNI_plugins"
+  tags:
+    - "Install_CNI_plugins"
+  hosts:
+    # Inventoryで定義をしたホストグループを指定する
+    - "k8s-node"
+  # 特権権限を付与する
+  become: true
+  vars:
+    cni_plugins_version: 1.4.0 # https://github.com/containernetworking/plugins/releases
+  tasks:
+    - name: "Download CNI plugins"
+      ansible.builtin.get_url:
+        url: "https://github.com/containernetworking/plugins/releases/download/v{{ cni_plugins_version }}/cni-plugins-linux-amd64-v{{ cni_plugins_version }}.tgz"
+        dest: /tmp
+        mode: '0644'
+      register: cni_plugins_download_result
+      notify:
+        - "Create directory /opt/cni/bin"
+        - "Extract CNI plugins"
+        - "Delete Archive File CNI plugins"
+
+  handlers:
+    - name: "Create directory /opt/cni/bin"
+      ansible.builtin.file:
+        path: /opt/cni/bin
+        state: directory
+        mode: '0755'
+      register: cni_plugins_dir_create_result
+
+    - name: "Extract CNI plugins"
+      ansible.builtin.unarchive:
+        src: /tmp/cni-plugins-linux-amd64-v{{ cni_plugins_version }}.tgz
+        dest: /opt/cni/bin
+        remote_src: true
+
+    - name: "Delete Archive File CNI plugins"
+      ansible.builtin.file:
+        path: /tmp/cni-plugins-linux-amd64-v{{ cni_plugins_version }}.tgz
+        state: absent
+
+# Nodeのconfファイル系設定
+- name: "Install_nerdctl"
+  tags:
+    - "Install_nerdctl"
+  hosts:
+    # Inventoryで定義をしたホストグループを指定する
+    - "k8s-node"
+  # 特権権限を付与する
+  become: true
+  vars:
+    nerdctl_version: 1.7.2 # https://github.com/containerd/nerdctl/releases
+  tasks:
+    # Install nerdctl
+    - name: "Download nerdctl"
+      ansible.builtin.get_url:
+        url: "https://github.com/containerd/nerdctl/releases/download/v{{ nerdctl_version }}/nerdctl-{{ nerdctl_version }}-linux-amd64.tar.gz"
+        dest: /tmp
+        mode: '0644'
+      register: nerdctl_download_result
+      notify:
+        - "Extract nerdctl"
+        - "Delete Archive File nerdctl"
+
+  handlers:
+    - name: "Extract nerdctl"
+      ansible.builtin.unarchive:
+        src: /tmp/nerdctl-{{ nerdctl_version }}-linux-amd64.tar.gz
+        dest: /usr/local/bin
+        remote_src: true
+
+    - name: "Delete Archive File nerdctl"
+      ansible.builtin.file:
+        path: /tmp/nerdctl-{{ nerdctl_version }}-linux-amd64.tar.gz
+        state: absent
+
+- name: "Install_crictl"
+  tags:
+    - "Install_crictl"
+  hosts:
+    # Inventoryで定義をしたホストグループを指定する
+    - "k8s-node"
+  # 特権権限を付与する
+  become: true
+  vars:
+    crictl_version: 1.29.0 # https://github.com/kubernetes-sigs/cri-tools/releases
+
+  tasks:
+    # Install crictl
+    - name: "Download crictl"
+      ansible.builtin.get_url:
+        url: "https://github.com/kubernetes-sigs/cri-tools/releases/download/v{{ crictl_version }}/crictl-v{{ crictl_version }}-linux-amd64.tar.gz"
+        dest: /tmp
+        mode: '755'
+      register: crictl_download_result
+      notify:
+        - "Extract crictl"
+        - "Delete Archive File crictl"
+
+  handlers:
+    - name: "Extract crictl"
+      ansible.builtin.unarchive:
+        src: /tmp/crictl-v{{ crictl_version }}-linux-amd64.tar.gz
+        dest: /usr/local/bin
+        remote_src: true
+
+    - name: "Delete Archive File crictl"
+      ansible.builtin.file:
+        path: /tmp/crictl-v{{ crictl_version }}-linux-amd64.tar.gz
+        state: absent
+
+# kubernetesのaptリポジトリの追加
+- name: "Setup-repository"
+  tags:
+    - "Setup-repository"
+  hosts:
+    # Inventoryで定義をしたホストグループを指定する
+    - "k8s-node"
+  # 特権権限を付与する
+  become: true
+  tasks:
+    # aptのパッケージ一覧を更新し、Kubernetesのaptリポジトリを利用するのに必要なパッケージをインストール
+    - name: "Install apt-packages"
+      ansible.builtin.apt:
+        name: "{{ item }}"
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      loop:
+        - "apt-transport-https"
+        - "ca-certificates"
+        - "curl"
+    # 公開鍵をダウンロードします
+    - name: "Download apt-key"
+      ansible.builtin.shell:
+        cmd: curl -fsSL https://dl.k8s.io/apt/doc/apt-key.gpg | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-archive-keyring.gpg
+      register: apt_key_download_result
+      notify:
+        - "Add repository"
+
+  handlers:
+    # Kubernetesのaptリポジトリを追加(/etc/apt/sources.list.dに追加される）
+    - name: "Add repository"
+      ansible.builtin.apt_repository:
+        repo: deb [signed-by=/etc/apt/keyrings/kubernetes-archive-keyring.gpg] https://apt.kubernetes.io/ kubernetes-xenial main
+        state: present
+        filename: kubernetes.list
+
+# kubelet、kubeadm、kubectlをインストールします。そしてバージョンを固定
+- name: "Install kubexxx"
+  tags:
+    - "Install kubexxx"
+  hosts:
+    # Inventoryで定義をしたホストグループを指定する
+    - "k8s-node"
+  # 特権権限を付与する
+  become: true
+  tasks:
+    # aptのパッケージ一覧を更新し、Kubernetesのaptリポジトリを利用するのに必要なパッケージをインストール
+    - name: "Install-kubexxx"
+      ansible.builtin.apt:
+        name: "{{ item }}"
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      loop:
+        - kubelet
+        - kubeadm
+        - kubectl
+      notify:
+        - "Hold-kubexxx"
+        - "Create kubelet EnvFile"
+        - "Kubelet restart"
+
+  handlers:
+    # kube関連のパッケージのバージョンを固定
+    - name: "Hold-kubexxx"
+      ansible.builtin.command: apt-mark hold {{ item }}
+      loop:
+        - kubelet
+        - kubeadm
+        - kubectl
+      register: hold_kubexxx_result
+
+    # コントロールプレーンノードのkubeletによって使用されるcgroupドライバーの設定
+    - name: "Create kubelet EnvFile"
+      ansible.builtin.copy:
+        content: KUBELET_EXTRA_ARGS=--cgroup-driver=systemd
+        dest: /etc/default/kubelet
+        mode: '0644'
+      register: kubelet_envfile_create_result
+
+    # kubeletの起動と永続化
+    - name: "Kubelet restart"
+      ansible.builtin.service:
+        name: kubelet
+        state: restarted
+        enabled: true
