@@ -227,7 +227,7 @@
         path: /tmp/cni-plugins-linux-amd64-v{{ cni_plugins_version }}.tgz
         state: absent
 
-# Nodeのconfファイル系設定
+# nerdctlのインストール
 - name: "Install_nerdctl"
   tags:
     - "Install_nerdctl"
@@ -261,7 +261,8 @@
       ansible.builtin.file:
         path: /tmp/nerdctl-{{ nerdctl_version }}-linux-amd64.tar.gz
         state: absent
-
+        
+# crictlインストール
 - name: "Install_crictl"
   tags:
     - "Install_crictl"
@@ -318,7 +319,7 @@
         - "apt-transport-https"
         - "ca-certificates"
         - "curl"
-    # 公開鍵をダウンロードします
+    # 公開鍵をダウンロード
     - name: "Download apt-key"
       ansible.builtin.shell:
         cmd: curl -fsSL https://dl.k8s.io/apt/doc/apt-key.gpg | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-archive-keyring.gpg
@@ -334,7 +335,7 @@
         state: present
         filename: kubernetes.list
 
-# kubelet、kubeadm、kubectlをインストールします。そしてバージョンを固定
+# kubelet、kubeadm、kubectlをインストール。そしてバージョンを固定
 - name: "Install kubexxx"
   tags:
     - "Install kubexxx"
