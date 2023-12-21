@@ -40,3 +40,4 @@ ansible-playbook -i inventory.txt k8s-node-setup_part.yaml
 ansible-playbook -i inventory.txt k8s-node-setup_part.yaml --tags "Containerd_setup" -v
 ```
 
+クラスタ化は別途、kubeadm init が必要
