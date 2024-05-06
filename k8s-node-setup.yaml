@@ -381,3 +381,28 @@
         name: kubelet
         state: restarted
         enabled: true
+
+# kubelet、kubeadm、kubectlをインストールします。そしてバージョンを固定
+- name: Add config
+  tags:
+    - Add_config
+  hosts:
+    # Inventoryで定義をしたホストグループを指定する
+    - k8s_node
+  # 特権権限を付与する
+  become: true
+  tasks:
+  # ターゲットマシンのユーザーに関する情報を収集
+  - name: Gather facts about the target user
+    ansible.builtin.setup:
+      filter: ansible_env
+
+  - name: Add kubectl completion bash to .bashrc
+    blockinfile:
+      path: "{{ ansible_env.HOME }}/.bashrc"
+      block: |
+        source <(kubectl completion bash)
+        alias k=kubectl
+        complete -F __start_kubectl k
+      marker: "# {mark} kubectl completion"
+      create: yes
