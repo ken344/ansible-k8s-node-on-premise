@@ -1,2 +1,2 @@
 [k8s_node]
-ubuntu01 ansible_host=192.168.10.132 ansible_connection=ssh ansible_user=osboxes
+ubuntu01 ansible_host=192.168.10.1 ansible_connection=ssh ansible_user=osboxes node_internal_ip=192.168.10.1

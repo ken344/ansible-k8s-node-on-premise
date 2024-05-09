@@ -40,7 +40,6 @@
     - name: Reload sysctl
       ansible.builtin.command: sysctl --system
 
-
 #      ### modulesのロード確認
 #     - name: Check Module
 #       ansible.builtin.shell:
@@ -109,7 +108,6 @@
       ansible.builtin.command: sh -c 'containerd config default > /etc/containerd/config.toml'
       register: containerd_config_create_result
 
-
     # Cgroupの設定を変更する
     - name: Replace a string in Containerd Config File
       ansible.builtin.replace:
@@ -140,7 +138,6 @@
         state: started
         enabled: true
 
-
 # runcのインストール
 - name: Install_runc
   tags:
@@ -164,12 +161,6 @@
     # runc　インストール
     - name: Install_command_runc
       ansible.builtin.command: install -m 755 /tmp/runc.amd64 /usr/local/sbin/runc
-
-    # - name: Copy runc binary(install -m 755 /tmp/runc.amd64 /usr/local/sbin/runc)
-    #   ansible.builtin.mv:
-    #     src: /tmp/runc.amd64
-    #     dest: /usr/local/sbin/runc
-    #     mode: "0755"
 
     - name: Delete_Archive_File_runc
       ansible.builtin.file:
@@ -342,15 +333,6 @@
         - kubeadm
         - kubectl
 
-    #   # kube関連のパッケージのバージョンを固定
-    # - name: Hold-kubexxx
-    #   ansible.builtin.command: apt-mark hold {{ item }}
-    #   loop:
-    #     - kubelet
-    #     - kubeadm
-    #     - kubectl
-    #   register: hold_kubexxx_result
-
     # kube関連のパッケージのバージョンを固定
     - name: Hold kubexxx
       ansible.builtin.dpkg_selections:
@@ -363,9 +345,11 @@
       register: hold_kubexxx_result
 
     # コントロールプレーンノードのkubeletによって使用されるcgroupドライバーの設定
+    # node-ipは、kubeletに認識させるノードのIPアドレスを指定する（NodeにIFが二つ以上ある場合、クラスタ内通信が想定外の動きをする事がある）
+    # https://kubernetes.io/docs/reference/command-line-tools-reference/kubelet/
     - name: Create kubelet EnvFile
       ansible.builtin.copy:
-        content: KUBELET_EXTRA_ARGS=--cgroup-driver=systemd
+        content: KUBELET_EXTRA_ARGS=--cgroup-driver=systemd --node-ip={{ node_internal_ip }}
         dest: /etc/default/kubelet
         mode: '0644'
       register: kubelet_envfile_create_result
@@ -382,7 +366,7 @@
         state: restarted
         enabled: true
 
-# kubelet、kubeadm、kubectlをインストールします。そしてバージョンを固定
+# kubernetesの追加設定など
 - name: Add config
   tags:
     - Add_config
@@ -397,6 +381,7 @@
     ansible.builtin.setup:
       filter: ansible_env
 
+  # https://kubernetes.io/ja/docs/reference/kubectl/cheatsheet/
   - name: Add kubectl completion bash to .bashrc
     blockinfile:
       path: "{{ ansible_env.HOME }}/.bashrc"
